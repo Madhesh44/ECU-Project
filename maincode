@@ -1,0 +1,118 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+const int ignitionPin = 2;
+const int faultPin = 3;
+const int statusLed = 4;
+const int fanLed = 5;
+const int warnLed = 6;
+const int buzzerPin = 7; 
+const int rpmPin = A2;
+const int tempPin = A1;
+const int voltPin = A0;
+
+const int TEMP_FAN_ON = 600;
+const int TEMP_CRITICAL = 900;
+const int VOLT_MIN = 200;
+
+enum ECUState { ENGINE_OFF, ENGINE_RUNNING, ENGINE_FAULT };
+ECUState currentState = ENGINE_OFF;
+unsigned long lastPrintTime = 0;
+
+void setup() {
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("ECU OFFLINE");
+  
+  pinMode(ignitionPin, INPUT_PULLUP);
+  pinMode(faultPin, INPUT_PULLUP);
+  pinMode(statusLed, OUTPUT);
+  pinMode(fanLed, OUTPUT);
+  pinMode(warnLed, OUTPUT);
+  pinMode(buzzerPin, OUTPUT); 
+}
+
+void loop() {
+  int rpmVal = analogRead(rpmPin);
+  int tempVal = analogRead(tempPin);
+  int voltVal = analogRead(voltPin);
+  
+  bool ignPressed = (digitalRead(ignitionPin) == LOW);
+  bool faultPressed = (digitalRead(faultPin) == LOW);
+
+  switch (currentState) {
+    case ENGINE_OFF:
+      digitalWrite(statusLed, LOW);
+      analogWrite(fanLed, 0);
+      digitalWrite(warnLed, LOW);
+      digitalWrite(buzzerPin, LOW); 
+      
+      if (ignPressed) {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("STARTING...");
+        delay(500); 
+        lcd.clear();
+        currentState = ENGINE_RUNNING;
+      }
+      break;
+
+    case ENGINE_RUNNING:
+      digitalWrite(statusLed, HIGH);
+      digitalWrite(warnLed, LOW);
+      
+      if (tempVal > TEMP_FAN_ON) {
+        int fanSpeed = constrain(map(tempVal, TEMP_FAN_ON, TEMP_CRITICAL, 0, 255), 0, 255); 
+        analogWrite(fanLed, fanSpeed);
+        
+        // Lightweight manual oscillation (~125Hz) replacing tone()
+        //digitalWrite(buzzerPin, (millis() % 8) < 4); 
+      } else {
+        analogWrite(fanLed, 0);
+        digitalWrite(buzzerPin, LOW); 
+      }
+
+      if (tempVal > TEMP_CRITICAL || voltVal < VOLT_MIN || faultPressed) {
+        currentState = ENGINE_FAULT;
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("CRITICAL FAULT!");
+      }
+      break;
+
+    case ENGINE_FAULT:
+      digitalWrite(statusLed, LOW);
+      analogWrite(fanLed, 0); 
+      digitalWrite(warnLed, HIGH); 
+      
+      // Lightweight manual high-pitch oscillation (~500Hz) replacing tone()
+      digitalWrite(buzzerPin, (millis() % 2) == 0); 
+      
+      if (ignPressed) {
+        delay(500); 
+        currentState = ENGINE_OFF;
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("ECU OFFLINE");
+      }
+      break;
+  }
+
+  if (millis() - lastPrintTime > 1000) {
+    if (currentState == ENGINE_RUNNING) {
+      lcd.setCursor(0, 0);
+      lcd.print("RPM:"); lcd.print(rpmVal);
+      lcd.print(" T:"); lcd.print(tempVal);
+      lcd.print("   "); 
+      
+      lcd.setCursor(0, 1);
+      lcd.print("Volts: "); lcd.print(voltVal);
+      lcd.print("   ");
+  
+    }
+    lastPrintTime = millis();
+  }
+}
